@@ -24,15 +24,6 @@ library(magick)
 #transform: Define um pipeline de pré-processamento:
  #Converte imagens em tensores (transform_to_tensor()).
  #Normaliza os valores dos pixels usando médias e desvios padrão do CIFAR10.
-
-#cifar10_dataset(): Carrega o dataset CIFAR10:
- #train = TRUE → Dados de treino (50k imagens).
- #train = FALSE → Dados de teste (10k imagens).
-
-#dataloader(): Divide os dados em batches (lotes) para treinamento eficiente:
- #batch_size = 128 → 128 imagens por lote.
- #shuffle = TRUE → Embaralha os dados de treino para evitar viés.
-
 transform <- function(img) {
   img %>%
     transform_to_tensor() %>%          # Converte a imagem para tensor
@@ -41,7 +32,9 @@ transform <- function(img) {
       std = c(0.2470, 0.2435, 0.2616)    # Desvios padrão do CIFAR10
     )
 }
-
+#cifar10_dataset(): Carrega o dataset CIFAR10:
+ #train = TRUE → Dados de treino (50k imagens).
+ #train = FALSE → Dados de teste (10k imagens).
 train_ds <- cifar10_dataset(
   root = "./data",       # Diretório onde os dados serão baixados
   train = TRUE,          # Carrega o conjunto de treino (50k imagens)
@@ -55,51 +48,35 @@ test_ds <- cifar10_dataset(
   download = TRUE,
   transform = transform
 )
-
-train_dl <- dataloader(train_ds, batch_size = 128, shuffle = TRUE)  # Cria batches de treino
-test_dl <- dataloader(test_ds, batch_size = 128)                    # Cria batches de teste
+#dataloader(): Divide os dados em batches (lotes) para treinamento eficiente:
+ #batch_size = 128 → 128 imagens por lote.
+ #shuffle = TRUE → Embaralha os dados de treino para evitar viés.
+train_dl <- dataloader(train_ds, batch_size = 128, shuffle = TRUE)  
+test_dl <- dataloader(test_ds, batch_size = 128)                   
 
 
 #3. Definição da Arquitetura CNN
-#4 camadas convolucionais + pooling + dropout + MLP.
+#Quatro camadas convolucionais + pooling + dropout + fully connected + MLP.
 
-#nn_module(): Define uma CNN personalizada.
-
-#Camadas convolucionais (nn_conv2d):
- #Extraem features das imagens (32, 64, 128 filtros).
- #kernel_size = 3: Filtros 3x3.
- #padding = 1: Mantém as dimensões espaciais.
-
-#Pooling (nn_max_pool2d): Reduz a dimensionalidade (tamanho da imagem pela metade).
-
-#Dropout (nn_dropout): Desativa aleatoriamente 50% dos neurônios para evitar overfitting.
-
-#Camadas lineares (nn_linear):
- #fc1: Definida dinamicamente para ajustar à saída das convoluções.
- #fc2: Produz logits para 10 classes.
-
-#forward(): Define o fluxo de dados:
- #Passa pelas convoluções + ReLU.
- #Aplica pooling e dropout.
- #Achata os tensores para a camada linear.
- #Classificação final.
-
-net <- nn_module(
+net <- nn_module(  # Define uma CNN personalizada
   "CIFAR10_CNN",
   initialize = function() {
-    # Camadas convolucionais
+    # Camadas convolucionais (nn_conv2d):
+     # Extraem features das imagens (32, 64, 128 filtros).
+     # kernel_size = 3: Filtros 3x3.
+     # padding = 1: Mantém as dimensões espaciais.
     self$conv1 <- nn_conv2d(3, 32, kernel_size = 3, padding = 1)  # 3 canais (RGB) → 32 filtros
     self$conv2 <- nn_conv2d(32, 64, kernel_size = 3, padding = 1) # 32 → 64 filtros
     self$conv3 <- nn_conv2d(64, 128, kernel_size = 3, padding = 1) # 64 → 128 filtros
     self$conv4 <- nn_conv2d(128, 128, kernel_size = 3, padding = 1) # 128 → 128 filtros
     
-    # Camadas de pooling e dropout
-    self$pool <- nn_max_pool2d(2)       # Reduz dimensão espacial pela metade
-    self$dropout <- nn_dropout(p = 0.5)  # Regularização (evita overfitting)
+    # Camadas Pooling:
+    self$pool <- nn_max_pool2d(2)       # Reduz dimensão espacial pela metade (tamanho da imagem pela metade)
+    self$dropout <- nn_dropout(p = 0.5) # Desativa aleatoriamente 50% dos neurônios para evitar overfitting
     
-    # Camadas fully connected (ajustadas dinamicamente)
-    self$fc1 <- NULL                    # Será definida no forward()
-    self$fc2 <- nn_linear(512, 10)      # 512 neurônios → 10 classes (saída)
+    #Camadas fully connected (totalmente conectadas), lineares (nn_linear):
+    self$fc1 <- NULL                # Definida dinamicamente para ajustar à saída das convoluções (será definida no forward())
+    self$fc2 <- nn_linear(512, 10)  # 512 neurônios → 10 classes (saída)
     
     # Camada auxiliar para cálculo de dimensões
     self$dim_calculator <- nn_sequential(
@@ -116,8 +93,8 @@ net <- nn_module(
       nn_flatten()  # Achata os tensores para a camada linear
     )
   },
-  
-  forward = function(x) {
+   
+  forward = function(x) { # Define o fluxo de dados
     # Calcula dimensões na primeira execução
     if (is.null(self$fc1)) {
       test_output <- self$dim_calculator(x)
@@ -131,13 +108,13 @@ net <- nn_module(
       self$conv2() %>% nnf_relu() %>%
       self$pool() %>%
       
-      # Bloco 2: Conv → ReLU → Conv → ReLU → Pool → Dropout
+      # Bloco 2: Conv → ReLU → Conv → ReLU → Pool → Dropout 
       self$conv3() %>% nnf_relu() %>%
       self$conv4() %>% nnf_relu() %>%
       self$pool() %>%
       self$dropout() %>%
       
-      # Achata para a camada linear
+      # Achata os tensores para a camada linear
       torch_flatten(start_dim = 2) %>%
       
       # Classificador (MLP)
@@ -151,31 +128,20 @@ net <- nn_module(
 #4. Treinamento do Modelo
 #Usando Adam e early stopping.
 
-#setup(): Configura o modelo:
- #Loss: Entropia cruzada (para classificação).
- #Otimizador: Adam (ajusta os pesos).
- #Métricas: Acurácia.
-
-#fit(): Treina o modelo:
- #epochs = 5: Passa pelos dados 5 vezes.
- #Callbacks:
-  #early_stopping: Interrompe se o modelo não melhorar em 3 épocas.
-  #model_checkpoint: Salva os melhores modelos em ./models/.
-
 fitted <- net %>%
-  setup(
-    loss = nn_cross_entropy_loss(),  # Função de perda (classificação)
-    optimizer = optim_adam,          # Otimizador Adam
-    metrics = list(luz_metric_accuracy())  # Acompanha a acurácia
+  setup(                                   # Configura o modelo
+    loss = nn_cross_entropy_loss(),        # Função de perda, entropia cruzada (classificação)
+    optimizer = optim_adam,                # Otimizador Adam (ajusta os pesos)
+    metrics = list(luz_metric_accuracy())  # Métrica será acurácia
   ) %>%
   set_hparams() %>%
-  fit(
+  fit(                              # Treina o modelo
     train_dl,                       # Dados de treino
     valid_data = test_dl,           # Dados de validação
-    epochs = 20,                    # Número de épocas
+    epochs = 20,                    # Número de épocas: passa pelos dados 20 vezes
     callbacks = list(
-      luz_callback_early_stopping(patience = 3),  # Para se não melhorar em 3 épocas
-      luz_callback_model_checkpoint(path = "./models/")  # Salva os melhores modelos
+      luz_callback_early_stopping(patience = 3),         # Interrompe se o modelo não melhorar em 3 épocas
+      luz_callback_model_checkpoint(path = "./models/")  # Salva os melhores modelos em ./models/
     )
   )
 
@@ -311,6 +277,7 @@ resultados_finais <- predizer_imagens(arquivos_imagens)
 
 # Mostra os resultados
 print(resultados_finais)
+
 
 
 
